@@ -1,6 +1,16 @@
 const fs = require("fs");
 const path = require("path");
 const { csvToArray } = require("../utils/utils");
+const axios = require("axios");
+const { setupCache } = require("axios-cache-adapter");
+
+const cache = setupCache({
+  maxAge: 15 * 60 * 1000,
+});
+
+const api = axios.create({
+  adapter: cache.adapter,
+});
 
 const getProviderCount = async (network, current, result, gps) => {
   const providers = {
@@ -11,6 +21,7 @@ const getProviderCount = async (network, current, result, gps) => {
       "africel data",
       "africel router",
       "africell outdoor",
+      "dk telecom",
     ],
     qcell: ["qcell", "qcell data", "qcell pocket router", "qcell router"],
     netpage: ["netpage", "natpage"],
@@ -18,7 +29,8 @@ const getProviderCount = async (network, current, result, gps) => {
     gamtel: ["gamtel", "gamtel adsl"],
     gamcel: ["gamcel", "gamcel adsl"],
     gamtel_fiber: ["gamtel fiber"],
-    other: ["other", "none", "others", "dk telecom"],
+    other: ["other", "none", "others"],
+    "dk telecom": ["dk telecom"],
   };
 
   return providers[network].includes(
@@ -30,7 +42,25 @@ const getProviderCount = async (network, current, result, gps) => {
     : 0;
 };
 
+const getGeoLocation = async (gps) => {
+  try {
+    const { data } = await api.get(`http://api.positionstack.com/v1/forward`, {
+      params: {
+        access_key: process.env.GEO_KEY,
+        query: gps,
+        limit: 1,
+      },
+    });
+    const countries =
+      data.data && data.data.filter((d) => d.country === "The Gambia");
+    return countries[0];
+  } catch (err) {
+    throw err;
+  }
+};
+
 const processData = async (data) => {
+  const visitedLocations = [];
   const result = {};
   for (let i = 0; i < data.length; i++) {
     const current = data[i];
@@ -38,6 +68,9 @@ const processData = async (data) => {
 
     if (gps) {
       result[gps] = {
+        // location: !visitedLocations.includes(gps)
+        //   ? await getGeoLocation(gps)
+        //   : result[gps]["location"],
         feedback: current.Feedback
           ? (result[gps] ? result[gps]["feedback"] : 0) + 1
           : 0,
@@ -53,6 +86,12 @@ const processData = async (data) => {
           ),
           qcell: await getProviderCount("qcell", current, result, gps),
           netpage: await getProviderCount("netpage", current, result, gps),
+          "dk telecom": await getProviderCount(
+            "dk telecom",
+            current,
+            result,
+            gps
+          ),
           netpage_fiber: await getProviderCount(
             "netpage_fiber",
             current,
@@ -65,6 +104,9 @@ const processData = async (data) => {
           ? (result[gps] ? result[gps]["prospect"] : 0) + 1
           : 0,
       };
+      if (!visitedLocations.includes(gps)) {
+        visitedLocations.push(gps);
+      }
     }
   }
   return result;
@@ -79,7 +121,7 @@ exports.getAnalytics = async (req, res) => {
 
       const data = await processData(await csvToArray(fileContent || ""));
 
-      res.send(data);
+      res.send(Object.entries(data));
     }
   );
 };
